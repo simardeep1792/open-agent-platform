@@ -1,0 +1,281 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: geospatial-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: geospatial-agent
+    app.kubernetes.io/component: analysis
+    app.kubernetes.io/part-of: foresight-platform
+    agent.foresight.ca/type: analysis
+    agent.foresight.ca/specialization: geospatial-intelligence
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: geospatial-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: geospatial-agent
+        app.kubernetes.io/component: analysis
+        agent.foresight.ca/type: analysis
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: geo-analyzer
+        image: ghcr.io/simardeep1792/foresight-geo-agent:latest
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 8090
+          name: a2a-protocol
+          protocol: TCP
+        env:
+        - name: AGENT_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: AGENT_TYPE
+          value: "geo-agent"
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: REGISTRY_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: registry_endpoint
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: log_level
+        - name: CLUSTER_DISTANCE_KM
+          value: "50"
+        - name: BORDER_BUFFER_KM
+          value: "25"
+        - name: POPULATION_DENSITY_THRESHOLD
+          value: "1000"
+        - name: SUPPORTED_PROJECTIONS
+          value: "EPSG:4326,EPSG:3857,EPSG:3347"
+        resources:
+          requests:
+            cpu: 200m
+            memory: 512Mi
+          limits:
+            cpu: 1000m
+            memory: 2Gi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 10
+        volumeMounts:
+        - name: config
+          mountPath: /app/config
+          readOnly: true
+        - name: geo-data
+          mountPath: /app/geodata
+        - name: spatial-cache
+          mountPath: /app/cache
+      volumes:
+      - name: config
+        configMap:
+          name: foresight-config
+      - name: geo-data
+        persistentVolumeClaim:
+          claimName: geo-data-store
+      - name: spatial-cache
+        emptyDir:
+          sizeLimit: 2Gi
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: geo-data-store
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: geospatial-agent
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 15Gi
+  storageClassName: standard
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: geospatial-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: geospatial-agent
+    app.kubernetes.io/component: analysis
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+  - name: a2a-protocol
+    port: 8090
+    targetPort: 8090
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: geospatial-agent
+---
+apiVersion: openagent.dev/v1
+kind: Agent
+metadata:
+  name: geospatial-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: geospatial-agent
+    app.kubernetes.io/component: analysis
+spec:
+  type: geo-agent
+  version: "1.0.0"
+  capabilities:
+    - name: "geo.cluster-analysis"
+      description: "Identify geographic disease clusters"
+      input_schema:
+        type: object
+        properties:
+          case_locations:
+            type: array
+            items:
+              type: object
+              properties:
+                latitude:
+                  type: number
+                  minimum: -90
+                  maximum: 90
+                longitude:
+                  type: number
+                  minimum: -180
+                  maximum: 180
+                case_count:
+                  type: integer
+                  minimum: 1
+                date:
+                  type: string
+                  format: date-time
+          cluster_radius_km:
+            type: number
+            minimum: 1
+            maximum: 1000
+            default: 50
+    - name: "geo.boundary-analysis"
+      description: "Assess cross-jurisdictional spread risks"
+      input_schema:
+        type: object
+        properties:
+          affected_areas:
+            type: array
+            items:
+              type: object
+              properties:
+                jurisdiction:
+                  type: string
+                boundary:
+                  type: object
+                case_density:
+                  type: number
+          buffer_distance_km:
+            type: number
+            minimum: 1
+            maximum: 100
+            default: 25
+    - name: "geo.population-density"
+      description: "Factor population density into risk calculations"
+      input_schema:
+        type: object
+        properties:
+          area:
+            type: object
+            properties:
+              latitude:
+                type: number
+              longitude:
+                type: number
+              radius_km:
+                type: number
+          risk_factors:
+            type: array
+            items:
+              type: string
+    - name: "geo.travel-pattern-analysis"
+      description: "Analyze travel-related transmission risks"
+      input_schema:
+        type: object
+        properties:
+          origin_location:
+            type: object
+            properties:
+              latitude:
+                type: number
+              longitude:
+                type: number
+          travel_modes:
+            type: array
+            items:
+              type: string
+              enum: ["air", "ground", "maritime", "pedestrian"]
+          analysis_radius_km:
+            type: number
+            minimum: 10
+            maximum: 5000
+            default: 500
+    - name: "geo.emergency-analysis"
+      description: "Emergency geographic analysis for urgent signals"
+      input_schema:
+        type: object
+        properties:
+          signal:
+            type: object
+          priority:
+            type: string
+            enum: ["critical", "high", "medium"]
+          jurisdiction_focus:
+            type: string
+  communication:
+    protocol: "json-rpc-2.0"
+    transport: "http"
+    endpoints:
+      - name: "primary"
+        url: "http://geospatial-agent.foresight-agents.svc.cluster.local:8090"
+  resources:
+    cpu: "200m"
+    memory: "512Mi"
+  scaling:
+    min_replicas: 1
+    max_replicas: 4
+    target_cpu_utilization: 75
+  health:
+    liveness_probe:
+      path: "/health"
+      port: 8080
+    readiness_probe:
+      path: "/ready"
+      port: 8080

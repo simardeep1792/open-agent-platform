@@ -1,0 +1,290 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: epidemiological-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: epidemiological-agent
+    app.kubernetes.io/component: analysis
+    app.kubernetes.io/part-of: foresight-platform
+    agent.foresight.ca/type: analysis
+    agent.foresight.ca/specialization: epidemiological-analysis
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: epidemiological-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: epidemiological-agent
+        app.kubernetes.io/component: analysis
+        agent.foresight.ca/type: analysis
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: epi-analyzer
+        image: ghcr.io/simardeep1792/foresight-epi-agent:latest
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 8090
+          name: a2a-protocol
+          protocol: TCP
+        env:
+        - name: AGENT_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: AGENT_TYPE
+          value: "epi-agent"
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: REGISTRY_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: registry_endpoint
+        - name: DATABASE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: foresight-secrets
+              key: database_password
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: log_level
+        - name: SURVEILLANCE_PIPELINES
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: surveillance_pipelines
+        - name: PARTICIPATING_JURISDICTIONS
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: participating_jurisdictions
+        - name: OUTBREAK_THRESHOLD
+          value: "0.65"
+        - name: CLUSTER_MIN_CASES
+          value: "3"
+        - name: TIME_WINDOW_HOURS
+          value: "72"
+        resources:
+          requests:
+            cpu: 300m
+            memory: 512Mi
+          limits:
+            cpu: 1500m
+            memory: 2Gi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 45
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        volumeMounts:
+        - name: config
+          mountPath: /app/config
+          readOnly: true
+        - name: epidata-cache
+          mountPath: /app/data
+        - name: analysis-workspace
+          mountPath: /app/workspace
+      volumes:
+      - name: config
+        configMap:
+          name: foresight-config
+      - name: epidata-cache
+        persistentVolumeClaim:
+          claimName: epi-data-cache
+      - name: analysis-workspace
+        emptyDir:
+          sizeLimit: 3Gi
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: epi-data-cache
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: epidemiological-agent
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: standard
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: epidemiological-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: epidemiological-agent
+    app.kubernetes.io/component: analysis
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+  - name: a2a-protocol
+    port: 8090
+    targetPort: 8090
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: epidemiological-agent
+---
+apiVersion: openagent.dev/v1
+kind: Agent
+metadata:
+  name: epidemiological-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: epidemiological-agent
+    app.kubernetes.io/component: analysis
+spec:
+  type: epi-agent
+  version: "1.0.0"
+  capabilities:
+    - name: "epi.pattern-analysis"
+      description: "Detect unusual disease patterns and clusters"
+      input_schema:
+        type: object
+        properties:
+          disease_data:
+            type: array
+            items:
+              type: object
+              properties:
+                disease:
+                  type: string
+                location:
+                  type: string
+                case_count:
+                  type: integer
+                date:
+                  type: string
+                  format: date-time
+          analysis_window:
+            type: string
+            pattern: "^[0-9]+[dhw]$"
+            default: "7d"
+    - name: "epi.risk-assessment"
+      description: "Evaluate outbreak risk levels"
+      input_schema:
+        type: object
+        properties:
+          cluster_data:
+            type: object
+            properties:
+              cases:
+                type: integer
+              location:
+                type: string
+              timespan:
+                type: string
+              population:
+                type: integer
+          risk_factors:
+            type: array
+            items:
+              type: string
+    - name: "epi.contact-tracing"
+      description: "Analyze potential transmission pathways"
+      input_schema:
+        type: object
+        properties:
+          initial_cases:
+            type: array
+            items:
+              type: object
+              properties:
+                case_id:
+                  type: string
+                location:
+                  type: string
+                onset_date:
+                  type: string
+                  format: date-time
+          max_degrees:
+            type: integer
+            minimum: 1
+            maximum: 6
+            default: 3
+    - name: "epi.forecast-spread"
+      description: "Predict disease spread patterns"
+      input_schema:
+        type: object
+        properties:
+          current_data:
+            type: object
+          model_parameters:
+            type: object
+            properties:
+              r_naught:
+                type: number
+              incubation_period:
+                type: integer
+              infectious_period:
+                type: integer
+          forecast_days:
+            type: integer
+            minimum: 1
+            maximum: 365
+            default: 14
+    - name: "epi.rapid-assessment"
+      description: "Emergency epidemiological assessment"
+      input_schema:
+        type: object
+        properties:
+          signal:
+            type: object
+          priority:
+            type: string
+            enum: ["critical", "high", "medium"]
+          jurisdiction:
+            type: string
+  communication:
+    protocol: "json-rpc-2.0"
+    transport: "http"
+    endpoints:
+      - name: "primary"
+        url: "http://epidemiological-agent.foresight-agents.svc.cluster.local:8090"
+  resources:
+    cpu: "300m"
+    memory: "512Mi"
+  scaling:
+    min_replicas: 2
+    max_replicas: 6
+    target_cpu_utilization: 80
+  health:
+    liveness_probe:
+      path: "/health"
+      port: 8080
+    readiness_probe:
+      path: "/ready"
+      port: 8080

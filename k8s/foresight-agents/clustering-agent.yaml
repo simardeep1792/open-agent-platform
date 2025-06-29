@@ -1,0 +1,294 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clustering-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: clustering-agent
+    app.kubernetes.io/component: clustering
+    app.kubernetes.io/part-of: foresight-platform
+    foresight.ca/agent-type: clustering
+    foresight.ca/pipeline-stage: m1-cluster
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: clustering-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: clustering-agent
+        app.kubernetes.io/component: clustering
+        foresight.ca/agent-type: clustering
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: clustering-processor
+        image: ghcr.io/simardeep1792/foresight-clustering-agent:latest
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 8090
+          name: a2a-protocol
+          protocol: TCP
+        - containerPort: 8091
+          name: streaming
+          protocol: TCP
+        env:
+        - name: AGENT_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: AGENT_TYPE
+          value: "foresight-clustering-agent"
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: REGISTRY_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: registry_endpoint
+        - name: CLUSTERING_THRESHOLD
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: clustering_threshold
+        - name: BATCH_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: batch_size
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: log_level
+        - name: CLUSTERING_ALGORITHM
+          value: "hierarchical"
+        - name: ONLINE_CLUSTERING_ENABLED
+          value: "true"
+        - name: MAX_CLUSTERS
+          value: "1000"
+        - name: MIN_CLUSTER_SIZE
+          value: "2"
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 2500m
+            memory: 4Gi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 45
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 20
+          periodSeconds: 10
+        volumeMounts:
+        - name: config
+          mountPath: /app/config
+          readOnly: true
+        - name: processed-data
+          mountPath: /data/processed
+        - name: clustering-models
+          mountPath: /app/models
+        - name: clustering-workspace
+          mountPath: /tmp/clustering
+      volumes:
+      - name: config
+        configMap:
+          name: foresight-config
+      - name: processed-data
+        persistentVolumeClaim:
+          claimName: foresight-processed-data
+      - name: clustering-models
+        persistentVolumeClaim:
+          claimName: foresight-clustering-models
+      - name: clustering-workspace
+        emptyDir:
+          sizeLimit: 3Gi
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: foresight-clustering-models
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: clustering-agent
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clustering-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: clustering-agent
+    app.kubernetes.io/component: clustering
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+  - name: a2a-protocol
+    port: 8090
+    targetPort: 8090
+    protocol: TCP
+  - name: streaming
+    port: 8091
+    targetPort: 8091
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: clustering-agent
+---
+apiVersion: openagent.dev/v1
+kind: Agent
+metadata:
+  name: clustering-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: clustering-agent
+    app.kubernetes.io/component: clustering
+spec:
+  type: foresight-clustering-agent
+  version: "1.0.0"
+  capabilities:
+    - name: "foresight.batch-cluster"
+      description: "Offline clustering of document collections (replaces 02_cluster.py)"
+      input_schema:
+        type: object
+        properties:
+          documents:
+            type: array
+            items:
+              type: object
+              properties:
+                id:
+                  type: string
+                content:
+                  type: string
+                vectors:
+                  type: array
+                  items:
+                    type: number
+          clustering_method:
+            type: string
+            enum: ["hierarchical", "kmeans", "dbscan"]
+            default: "hierarchical"
+          similarity_threshold:
+            type: number
+            minimum: 0.0
+            maximum: 1.0
+            default: 0.8
+    - name: "foresight.online-cluster"
+      description: "Real-time clustering for streaming documents (replaces online_cluster.py)"
+      input_schema:
+        type: object
+        properties:
+          new_document:
+            type: object
+            properties:
+              id:
+                type: string
+              content:
+                type: string
+              vectors:
+                type: array
+                items:
+                  type: number
+          existing_clusters:
+            type: array
+            items:
+              type: object
+          update_threshold:
+            type: number
+            minimum: 0.0
+            maximum: 1.0
+            default: 0.7
+    - name: "foresight.similarity-analysis"
+      description: "Document similarity computation"
+      input_schema:
+        type: object
+        properties:
+          document_pairs:
+            type: array
+            items:
+              type: object
+              properties:
+                doc1:
+                  type: object
+                doc2:
+                  type: object
+          similarity_metric:
+            type: string
+            enum: ["cosine", "jaccard", "euclidean"]
+            default: "cosine"
+    - name: "foresight.cluster-optimization"
+      description: "Dynamic cluster refinement"
+      input_schema:
+        type: object
+        properties:
+          clusters:
+            type: array
+            items:
+              type: object
+          optimization_criteria:
+            type: object
+            properties:
+              max_cluster_size:
+                type: integer
+                default: 100
+              min_cluster_size:
+                type: integer
+                default: 2
+              cohesion_threshold:
+                type: number
+                default: 0.6
+  communication:
+    protocol: "json-rpc-2.0"
+    transport: "http+websocket"
+    endpoints:
+      - name: "primary"
+        url: "http://clustering-agent.foresight-agents.svc.cluster.local:8090"
+      - name: "streaming"
+        url: "ws://clustering-agent.foresight-agents.svc.cluster.local:8091"
+  resources:
+    cpu: "500m"
+    memory: "1Gi"
+  scaling:
+    min_replicas: 1
+    max_replicas: 4
+    target_cpu_utilization: 80
+  health:
+    liveness_probe:
+      path: "/health"
+      port: 8080
+    readiness_probe:
+      path: "/ready"
+      port: 8080

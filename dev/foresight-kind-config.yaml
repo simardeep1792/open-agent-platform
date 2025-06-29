@@ -1,0 +1,108 @@
+# Foresight Agent Platform - Kind Cluster Configuration
+# Optimized for public health signal detection and agent coordination
+
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: foresight-platform
+
+# Networking configuration optimized for health data processing
+networking:
+  # Dedicated subnets for Foresight platform
+  podSubnet: "10.200.0.0/16"
+  serviceSubnet: "10.100.0.0/16"
+  # Enable dual-stack for future expansion
+  ipFamily: dual
+  # Use default CNI for simplicity
+  disableDefaultCNI: false
+
+# Multi-node setup for distributed health signal processing
+nodes:
+# Control plane node - Registry and coordination services
+- role: control-plane
+  kubeadmConfigPatches:
+  - |
+    kind: InitConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        node-labels: "foresight.ca/node-type=control-plane,foresight.ca/workload=coordination"
+  # Port mappings for Foresight services
+  extraPortMappings:
+  # Foresight Dashboard
+  - containerPort: 30100
+    hostPort: 8100
+    protocol: TCP
+  # Agent Registry API
+  - containerPort: 30101
+    hostPort: 8101
+    protocol: TCP
+  # Signal Fusion Coordination
+  - containerPort: 30102
+    hostPort: 8102
+    protocol: TCP
+  # Public Health Data API
+  - containerPort: 30103
+    hostPort: 8103
+    protocol: TCP
+  # Grafana (Health Metrics)
+  - containerPort: 30104
+    hostPort: 3100
+    protocol: TCP
+  # Prometheus (Agent Metrics)
+  - containerPort: 30105
+    hostPort: 9100
+    protocol: TCP
+  # Alert Manager
+  - containerPort: 30106
+    hostPort: 9200
+    protocol: TCP
+  # Kibana (Logs)
+  - containerPort: 30107
+    hostPort: 5601
+    protocol: TCP
+
+# Data ingestion node - News and social media agents
+- role: worker
+  kubeadmConfigPatches:
+  - |
+    kind: JoinConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        node-labels: "foresight.ca/node-type=worker,foresight.ca/workload=ingestion,foresight.ca/zone=primary"
+        max-pods: "200"
+
+# Analysis node - NLP, epidemiological, and geospatial agents
+- role: worker
+  kubeadmConfigPatches:
+  - |
+    kind: JoinConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        node-labels: "foresight.ca/node-type=worker,foresight.ca/workload=analysis,foresight.ca/zone=analysis"
+        max-pods: "150"
+
+# Intelligence fusion node - Signal correlation and decision support
+- role: worker
+  kubeadmConfigPatches:
+  - |
+    kind: JoinConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        node-labels: "foresight.ca/node-type=worker,foresight.ca/workload=fusion,foresight.ca/zone=intelligence"
+        max-pods: "100"
+
+# Feature gates for advanced health data processing
+featureGates:
+  # Enhanced resource management for health workloads
+  APIPriorityAndFairness: true
+  # Topology-aware routing for agent communication
+  TopologyAwareHints: true
+  # Graceful handling of health data processing
+  GracefulNodeShutdown: true
+  # Advanced scheduling for health workloads
+  PodOverhead: true
+  # Enhanced security for health data
+  PodSecurity: true
+
+# Runtime configuration for health data processing
+runtimeConfig:
+  "api/all": "true"

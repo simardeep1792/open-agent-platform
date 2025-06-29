@@ -1,0 +1,227 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: social-media-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: social-media-agent
+    app.kubernetes.io/component: data-ingestion
+    app.kubernetes.io/part-of: foresight-platform
+    agent.foresight.ca/type: ingestion
+    agent.foresight.ca/specialization: social-media-monitoring
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: social-media-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: social-media-agent
+        app.kubernetes.io/component: data-ingestion
+        agent.foresight.ca/type: ingestion
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: social-media-monitor
+        image: ghcr.io/simardeep1792/foresight-social-media:latest
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 8090
+          name: a2a-protocol
+          protocol: TCP
+        - containerPort: 8091
+          name: websocket
+          protocol: TCP
+        env:
+        - name: AGENT_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: AGENT_TYPE
+          value: "social-media-agent"
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: REGISTRY_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: registry_endpoint
+        - name: SOCIAL_MEDIA_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: foresight-secrets
+              key: social_media_api_key
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: log_level
+        - name: STREAM_BUFFER_SIZE
+          value: "1000"
+        - name: ANOMALY_DETECTION_THRESHOLD
+          value: "0.75"
+        resources:
+          requests:
+            cpu: 150m
+            memory: 256Mi
+          limits:
+            cpu: 750m
+            memory: 1Gi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        volumeMounts:
+        - name: config
+          mountPath: /app/config
+          readOnly: true
+        - name: stream-buffer
+          mountPath: /app/buffer
+      volumes:
+      - name: config
+        configMap:
+          name: foresight-config
+      - name: stream-buffer
+        emptyDir:
+          sizeLimit: 2Gi
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: social-media-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: social-media-agent
+    app.kubernetes.io/component: data-ingestion
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+  - name: a2a-protocol
+    port: 8090
+    targetPort: 8090
+    protocol: TCP
+  - name: websocket
+    port: 8091
+    targetPort: 8091
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: social-media-agent
+---
+apiVersion: openagent.dev/v1
+kind: Agent
+metadata:
+  name: social-media-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: social-media-agent
+    app.kubernetes.io/component: data-ingestion
+spec:
+  type: social-media-agent
+  version: "1.0.0"
+  capabilities:
+    - name: "social.monitor-platforms"
+      description: "Track Twitter, Reddit, Facebook for health mentions"
+      input_schema:
+        type: object
+        properties:
+          platforms:
+            type: array
+            items:
+              type: string
+              enum: ["twitter", "reddit", "facebook", "instagram"]
+          keywords:
+            type: array
+            items:
+              type: string
+          real_time:
+            type: boolean
+            default: true
+    - name: "social.detect-anomalies"
+      description: "Identify unusual patterns in health-related discussions"
+      input_schema:
+        type: object
+        properties:
+          time_window:
+            type: string
+            pattern: "^[0-9]+[smhd]$"
+          threshold:
+            type: number
+            minimum: 0.0
+            maximum: 1.0
+    - name: "social.sentiment-analysis"
+      description: "Analyze public sentiment around health topics"
+      input_schema:
+        type: object
+        properties:
+          content:
+            type: array
+            items:
+              type: string
+          topics:
+            type: array
+            items:
+              type: string
+    - name: "social.verify-rumors"
+      description: "Cross-reference social media claims with authoritative sources"
+      input_schema:
+        type: object
+        properties:
+          claims:
+            type: array
+            items:
+              type: object
+              properties:
+                content:
+                  type: string
+                source:
+                  type: string
+                timestamp:
+                  type: string
+                  format: date-time
+  communication:
+    protocol: "json-rpc-2.0"
+    transport: "http+websocket"
+    endpoints:
+      - name: "primary"
+        url: "http://social-media-agent.foresight-agents.svc.cluster.local:8090"
+      - name: "streaming"
+        url: "ws://social-media-agent.foresight-agents.svc.cluster.local:8091"
+  resources:
+    cpu: "150m"
+    memory: "256Mi"
+  scaling:
+    min_replicas: 2
+    max_replicas: 8
+    target_cpu_utilization: 70
+  health:
+    liveness_probe:
+      path: "/health"
+      port: 8080
+    readiness_probe:
+      path: "/ready"
+      port: 8080

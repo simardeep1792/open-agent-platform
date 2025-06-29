@@ -1,0 +1,287 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: similarity-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: similarity-agent
+    app.kubernetes.io/component: similarity
+    app.kubernetes.io/part-of: foresight-platform
+    foresight.ca/agent-type: similarity
+    foresight.ca/pipeline-stage: m1-similarize
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: similarity-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: similarity-agent
+        app.kubernetes.io/component: similarity
+        foresight.ca/agent-type: similarity
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: similarity-processor
+        image: ghcr.io/simardeep1792/foresight-similarity-agent:latest
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 8090
+          name: a2a-protocol
+          protocol: TCP
+        env:
+        - name: AGENT_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: AGENT_TYPE
+          value: "foresight-similarity-agent"
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: REGISTRY_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: registry_endpoint
+        - name: SIMILARITY_THRESHOLD
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: similarity_threshold
+        - name: BATCH_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: batch_size
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: log_level
+        - name: SIMILARITY_ALGORITHM
+          value: "cosine"
+        - name: DUPLICATE_THRESHOLD
+          value: "0.95"
+        - name: GRAPH_GENERATION_ENABLED
+          value: "true"
+        - name: MAX_SIMILARITY_PAIRS
+          value: "10000"
+        resources:
+          requests:
+            cpu: 300m
+            memory: 512Mi
+          limits:
+            cpu: 1500m
+            memory: 2Gi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        volumeMounts:
+        - name: config
+          mountPath: /app/config
+          readOnly: true
+        - name: processed-data
+          mountPath: /data/processed
+        - name: similarity-cache
+          mountPath: /app/cache
+        - name: similarity-workspace
+          mountPath: /tmp/similarity
+      volumes:
+      - name: config
+        configMap:
+          name: foresight-config
+      - name: processed-data
+        persistentVolumeClaim:
+          claimName: foresight-processed-data
+      - name: similarity-cache
+        persistentVolumeClaim:
+          claimName: foresight-similarity-cache
+      - name: similarity-workspace
+        emptyDir:
+          sizeLimit: 2Gi
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: foresight-similarity-cache
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: similarity-agent
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: standard
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: similarity-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: similarity-agent
+    app.kubernetes.io/component: similarity
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+  - name: a2a-protocol
+    port: 8090
+    targetPort: 8090
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: similarity-agent
+---
+apiVersion: openagent.dev/v1
+kind: Agent
+metadata:
+  name: similarity-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: similarity-agent
+    app.kubernetes.io/component: similarity
+spec:
+  type: foresight-similarity-agent
+  version: "1.0.0"
+  capabilities:
+    - name: "foresight.compute-similarity"
+      description: "Calculate document similarity scores (replaces 04_similarize.py)"
+      input_schema:
+        type: object
+        properties:
+          documents:
+            type: array
+            items:
+              type: object
+              properties:
+                id:
+                  type: string
+                content:
+                  type: string
+                vectors:
+                  type: array
+                  items:
+                    type: number
+          similarity_metric:
+            type: string
+            enum: ["cosine", "jaccard", "euclidean", "manhattan"]
+            default: "cosine"
+          threshold:
+            type: number
+            minimum: 0.0
+            maximum: 1.0
+            default: 0.7
+    - name: "foresight.find-related"
+      description: "Identify related document clusters"
+      input_schema:
+        type: object
+        properties:
+          query_document:
+            type: object
+            properties:
+              id:
+                type: string
+              content:
+                type: string
+              vectors:
+                type: array
+                items:
+                  type: number
+          document_collection:
+            type: array
+            items:
+              type: object
+          max_results:
+            type: integer
+            minimum: 1
+            maximum: 1000
+            default: 50
+    - name: "foresight.duplicate-detection"
+      description: "Identify and handle duplicate content"
+      input_schema:
+        type: object
+        properties:
+          documents:
+            type: array
+            items:
+              type: object
+          duplicate_threshold:
+            type: number
+            minimum: 0.8
+            maximum: 1.0
+            default: 0.95
+          resolution_strategy:
+            type: string
+            enum: ["merge", "keep_first", "keep_latest"]
+            default: "keep_latest"
+    - name: "foresight.similarity-graph"
+      description: "Build document similarity networks"
+      input_schema:
+        type: object
+        properties:
+          documents:
+            type: array
+            items:
+              type: object
+          similarity_threshold:
+            type: number
+            minimum: 0.0
+            maximum: 1.0
+            default: 0.5
+          max_edges_per_node:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+          graph_format:
+            type: string
+            enum: ["adjacency_matrix", "edge_list", "networkx"]
+            default: "edge_list"
+  communication:
+    protocol: "json-rpc-2.0"
+    transport: "http"
+    endpoints:
+      - name: "primary"
+        url: "http://similarity-agent.foresight-agents.svc.cluster.local:8090"
+  resources:
+    cpu: "300m"
+    memory: "512Mi"
+  scaling:
+    min_replicas: 1
+    max_replicas: 4
+    target_cpu_utilization: 75
+  health:
+    liveness_probe:
+      path: "/health"
+      port: 8080
+    readiness_probe:
+      path: "/ready"
+      port: 8080

@@ -1,0 +1,202 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: news-monitor-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: news-monitor-agent
+    app.kubernetes.io/component: data-ingestion
+    app.kubernetes.io/part-of: foresight-platform
+    agent.foresight.ca/type: ingestion
+    agent.foresight.ca/specialization: news-monitoring
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: news-monitor-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: news-monitor-agent
+        app.kubernetes.io/component: data-ingestion
+        agent.foresight.ca/type: ingestion
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: news-monitor
+        image: ghcr.io/simardeep1792/foresight-news-monitor:latest
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 8090
+          name: a2a-protocol
+          protocol: TCP
+        env:
+        - name: AGENT_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: AGENT_TYPE
+          value: "news-monitor-agent"
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: REGISTRY_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: registry_endpoint
+        - name: NEWS_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: foresight-secrets
+              key: news_api_key
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: log_level
+        - name: MAX_CONCURRENT_REQUESTS
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: max_concurrent_requests
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 5
+        volumeMounts:
+        - name: config
+          mountPath: /app/config
+          readOnly: true
+        - name: data
+          mountPath: /app/data
+      volumes:
+      - name: config
+        configMap:
+          name: foresight-config
+      - name: data
+        emptyDir: {}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: news-monitor-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: news-monitor-agent
+    app.kubernetes.io/component: data-ingestion
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+  - name: a2a-protocol
+    port: 8090
+    targetPort: 8090
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: news-monitor-agent
+---
+apiVersion: openagent.dev/v1
+kind: Agent
+metadata:
+  name: news-monitor-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: news-monitor-agent
+    app.kubernetes.io/component: data-ingestion
+spec:
+  type: news-monitor-agent
+  version: "1.0.0"
+  capabilities:
+    - name: "news.ingest-sources"
+      description: "Monitor configured news sources and RSS feeds"
+      input_schema:
+        type: object
+        properties:
+          sources:
+            type: array
+            items:
+              type: string
+          interval:
+            type: integer
+            minimum: 1000
+    - name: "news.detect-health-signals"
+      description: "Identify health-related content using NLP"
+      input_schema:
+        type: object
+        properties:
+          content:
+            type: string
+          confidence_threshold:
+            type: number
+            minimum: 0.0
+            maximum: 1.0
+    - name: "news.extract-entities"
+      description: "Extract locations, diseases, symptoms, and key entities"
+      input_schema:
+        type: object
+        properties:
+          text:
+            type: string
+          entity_types:
+            type: array
+            items:
+              type: string
+    - name: "news.assess-credibility"
+      description: "Evaluate source reliability and content quality"
+      input_schema:
+        type: object
+        properties:
+          source:
+            type: string
+          content:
+            type: string
+  communication:
+    protocol: "json-rpc-2.0"
+    transport: "http"
+    endpoints:
+      - name: "primary"
+        url: "http://news-monitor-agent.foresight-agents.svc.cluster.local:8090"
+  resources:
+    cpu: "100m"
+    memory: "128Mi"
+  scaling:
+    min_replicas: 1
+    max_replicas: 5
+    target_cpu_utilization: 70
+  health:
+    liveness_probe:
+      path: "/health"
+      port: 8080
+    readiness_probe:
+      path: "/ready"
+      port: 8080

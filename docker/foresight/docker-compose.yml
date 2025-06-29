@@ -1,0 +1,351 @@
+# Foresight Health Platform - Docker Compose Development Environment
+# Complete agent-based public health surveillance system
+
+version: '3.8'
+
+services:
+  # Base infrastructure services
+  redis:
+    image: redis:7-alpine
+    container_name: foresight-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - foresight-network
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: foresight-postgres
+    environment:
+      POSTGRES_DB: foresight_health
+      POSTGRES_USER: foresight
+      POSTGRES_PASSWORD: health_surveillance_2024
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U foresight"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - foresight-network
+
+  # Agent Registry (base platform)
+  agent-registry:
+    build:
+      context: ../../
+      dockerfile: Dockerfile
+      target: registry
+    container_name: foresight-registry
+    environment:
+      NODE_ENV: development
+      LOG_LEVEL: debug
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgresql://foresight:health_surveillance_2024@postgres:5432/foresight_health
+    ports:
+      - "8080:8080"
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - foresight-network
+
+  # Data Ingestion Agents
+  news-monitor-agent:
+    build:
+      context: ../../
+      dockerfile: docker/foresight/Dockerfile.news-monitor
+    container_name: foresight-news-monitor
+    environment:
+      AGENT_TYPE: news-monitor-agent
+      REGISTRY_ENDPOINT: http://agent-registry:8080
+      NEWS_API_KEY: ${NEWS_API_KEY:-demo-key}
+      LOG_LEVEL: debug
+      NEWS_POLL_INTERVAL: 30000
+      NEWS_SOURCES_PATH: /app/config/news-sources.json
+    ports:
+      - "8081:8080"
+      - "8091:8090"
+    depends_on:
+      agent-registry:
+        condition: service_healthy
+    volumes:
+      - news_data:/app/data/news
+      - ./config/news-sources.json:/app/config/news-sources.json:ro
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - foresight-network
+
+  social-media-agent:
+    build:
+      context: ../../
+      dockerfile: docker/foresight/Dockerfile.social-media
+    container_name: foresight-social-media
+    environment:
+      AGENT_TYPE: social-media-agent
+      REGISTRY_ENDPOINT: http://agent-registry:8080
+      SOCIAL_MEDIA_API_KEY: ${SOCIAL_MEDIA_API_KEY:-demo-key}
+      LOG_LEVEL: debug
+      STREAM_BUFFER_SIZE: 1000
+      ANOMALY_DETECTION_THRESHOLD: 0.75
+    ports:
+      - "8082:8080"
+      - "8092:8090"
+      - "8182:8091"
+    depends_on:
+      agent-registry:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - social_data:/app/data/social
+      - social_buffer:/app/buffer
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - foresight-network
+
+  # Analysis Agents
+  nlp-agent:
+    build:
+      context: ../../
+      dockerfile: docker/foresight/Dockerfile.nlp-agent
+    container_name: foresight-nlp
+    environment:
+      AGENT_TYPE: nlp-agent
+      REGISTRY_ENDPOINT: http://agent-registry:8080
+      NLP_SERVICE_TOKEN: ${NLP_SERVICE_TOKEN:-demo-token}
+      LOG_LEVEL: debug
+      MODEL_CACHE_SIZE: 2048
+      BATCH_SIZE: 32
+      SUPPORTED_LANGUAGES: en,fr,es
+    ports:
+      - "8083:8080"
+      - "8093:8090"
+    depends_on:
+      agent-registry:
+        condition: service_healthy
+    volumes:
+      - nlp_models:/app/models
+      - nlp_temp:/app/temp
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 45s
+      timeout: 15s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 1G
+    networks:
+      - foresight-network
+
+  epidemiological-agent:
+    build:
+      context: ../../
+      dockerfile: docker/foresight/Dockerfile.epidemiological
+    container_name: foresight-epidemiological
+    environment:
+      AGENT_TYPE: epi-agent
+      REGISTRY_ENDPOINT: http://agent-registry:8080
+      DATABASE_URL: postgresql://foresight:health_surveillance_2024@postgres:5432/foresight_health
+      LOG_LEVEL: debug
+      SURVEILLANCE_PIPELINES: 64
+      PARTICIPATING_JURISDICTIONS: 13
+      OUTBREAK_THRESHOLD: 0.65
+      CLUSTER_MIN_CASES: 3
+      TIME_WINDOW_HOURS: 72
+    ports:
+      - "8084:8080"
+      - "8094:8090"
+    depends_on:
+      agent-registry:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - epi_data:/app/data
+      - epi_workspace:/app/workspace
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 45s
+      timeout: 15s
+      retries: 3
+    networks:
+      - foresight-network
+
+  geospatial-agent:
+    build:
+      context: ../../
+      dockerfile: docker/foresight/Dockerfile.geospatial
+    container_name: foresight-geospatial
+    environment:
+      AGENT_TYPE: geo-agent
+      REGISTRY_ENDPOINT: http://agent-registry:8080
+      LOG_LEVEL: debug
+      CLUSTER_DISTANCE_KM: 50
+      BORDER_BUFFER_KM: 25
+      POPULATION_DENSITY_THRESHOLD: 1000
+      SUPPORTED_PROJECTIONS: EPSG:4326,EPSG:3857,EPSG:3347
+    ports:
+      - "8085:8080"
+      - "8095:8090"
+    depends_on:
+      agent-registry:
+        condition: service_healthy
+    volumes:
+      - geo_data:/app/geodata
+      - geo_cache:/app/cache
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+    networks:
+      - foresight-network
+
+  # Intelligence Fusion Agent
+  signal-fusion-agent:
+    build:
+      context: ../../
+      dockerfile: docker/foresight/Dockerfile.signal-fusion
+    container_name: foresight-fusion
+    environment:
+      AGENT_TYPE: fusion-agent
+      REGISTRY_ENDPOINT: http://agent-registry:8080
+      REDIS_URL: redis://redis:6379
+      DATABASE_URL: postgresql://foresight:health_surveillance_2024@postgres:5432/foresight_health
+      LOG_LEVEL: debug
+      ALERT_THRESHOLD_HIGH: 0.8
+      ALERT_THRESHOLD_MEDIUM: 0.6
+      CORRELATION_WINDOW_MINUTES: 60
+      MAX_SIGNAL_AGE_HOURS: 24
+      CONFIDENCE_THRESHOLD: 0.7
+      KNOWLEDGE_GRAPH_SIZE: 10000
+    ports:
+      - "8086:8080"
+      - "8096:8090"
+      - "8196:8091"
+    depends_on:
+      agent-registry:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - fusion_cache:/app/cache
+      - knowledge_graph:/app/knowledge
+      - fusion_workspace:/app/workspace
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 45s
+      timeout: 15s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 1G
+    networks:
+      - foresight-network
+
+  # Monitoring and Visualization
+  grafana:
+    image: grafana/grafana:latest
+    container_name: foresight-grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: foresight123
+      GF_USERS_ALLOW_SIGN_UP: false
+      GF_INSTALL_PLUGINS: grafana-worldmap-panel,grafana-piechart-panel
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./grafana/datasources:/etc/grafana/provisioning/datasources
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - foresight-network
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: foresight-prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - foresight-network
+
+# Persistent volumes for health data
+volumes:
+  redis_data:
+  postgres_data:
+  news_data:
+  social_data:
+  social_buffer:
+  nlp_models:
+  nlp_temp:
+  epi_data:
+  epi_workspace:
+  geo_data:
+  geo_cache:
+  fusion_cache:
+  knowledge_graph:
+  fusion_workspace:
+  grafana_data:
+  prometheus_data:
+
+# Network for agent communication
+networks:
+  foresight-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

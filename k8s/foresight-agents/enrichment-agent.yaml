@@ -1,0 +1,277 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: enrichment-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: enrichment-agent
+    app.kubernetes.io/component: enrichment
+    app.kubernetes.io/part-of: foresight-platform
+    foresight.ca/agent-type: enrichment
+    foresight.ca/pipeline-stage: m1-enrich
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: enrichment-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: enrichment-agent
+        app.kubernetes.io/component: enrichment
+        foresight.ca/agent-type: enrichment
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: enrichment-processor
+        image: ghcr.io/simardeep1792/foresight-enrichment-agent:latest
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 8090
+          name: a2a-protocol
+          protocol: TCP
+        env:
+        - name: AGENT_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: AGENT_TYPE
+          value: "foresight-enrichment-agent"
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: REGISTRY_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: registry_endpoint
+        - name: ENRICHMENT_BATCH_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: enrichment_batch_size
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: log_level
+        - name: SEMANTIC_ENRICHMENT_ENABLED
+          value: "true"
+        - name: ENTITY_EXTRACTION_ENABLED
+          value: "true"
+        - name: ONTOLOGY_MAPPING_ENABLED
+          value: "true"
+        - name: TEMPORAL_ENRICHMENT_ENABLED
+          value: "true"
+        - name: WHO_DATA_SOURCE
+          value: "/data/who-ontology"
+        - name: DISEASE_ONTOLOGY_SOURCE
+          value: "/data/disease-ontology"
+        resources:
+          requests:
+            cpu: 400m
+            memory: 768Mi
+          limits:
+            cpu: 2000m
+            memory: 3Gi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 45
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 20
+          periodSeconds: 10
+        volumeMounts:
+        - name: config
+          mountPath: /app/config
+          readOnly: true
+        - name: processed-data
+          mountPath: /data/processed
+        - name: ontology-data
+          mountPath: /data/ontologies
+        - name: enrichment-workspace
+          mountPath: /tmp/enrichment
+      volumes:
+      - name: config
+        configMap:
+          name: foresight-config
+      - name: processed-data
+        persistentVolumeClaim:
+          claimName: foresight-processed-data
+      - name: ontology-data
+        persistentVolumeClaim:
+          claimName: foresight-ontology-data
+      - name: enrichment-workspace
+        emptyDir:
+          sizeLimit: 2Gi
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: foresight-ontology-data
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: enrichment-agent
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - ReadOnlyMany
+  resources:
+    requests:
+      storage: 15Gi
+  storageClassName: standard
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: enrichment-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: enrichment-agent
+    app.kubernetes.io/component: enrichment
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+  - name: a2a-protocol
+    port: 8090
+    targetPort: 8090
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: enrichment-agent
+---
+apiVersion: openagent.dev/v1
+kind: Agent
+metadata:
+  name: enrichment-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: enrichment-agent
+    app.kubernetes.io/component: enrichment
+spec:
+  type: foresight-enrichment-agent
+  version: "1.0.0"
+  capabilities:
+    - name: "foresight.semantic-enrichment"
+      description: "Add semantic annotations (replaces 03_enrich.py)"
+      input_schema:
+        type: object
+        properties:
+          documents:
+            type: array
+            items:
+              type: object
+              properties:
+                id:
+                  type: string
+                content:
+                  type: string
+                metadata:
+                  type: object
+          enrichment_types:
+            type: array
+            items:
+              type: string
+              enum: ["semantic", "syntactic", "conceptual"]
+          confidence_threshold:
+            type: number
+            minimum: 0.0
+            maximum: 1.0
+            default: 0.7
+    - name: "foresight.entity-extraction"
+      description: "Identify health entities and concepts"
+      input_schema:
+        type: object
+        properties:
+          text:
+            type: string
+          entity_types:
+            type: array
+            items:
+              type: string
+              enum: ["disease", "symptom", "location", "person", "organization", "date"]
+          extraction_model:
+            type: string
+            enum: ["medical-ner", "health-specific", "general"]
+            default: "medical-ner"
+    - name: "foresight.ontology-mapping"
+      description: "Map to disease ontologies and WHO data"
+      input_schema:
+        type: object
+        properties:
+          entities:
+            type: array
+            items:
+              type: object
+              properties:
+                text:
+                  type: string
+                type:
+                  type: string
+                confidence:
+                  type: number
+          ontology_sources:
+            type: array
+            items:
+              type: string
+              enum: ["who", "icd10", "disease-ontology", "mesh"]
+          mapping_threshold:
+            type: number
+            minimum: 0.0
+            maximum: 1.0
+            default: 0.8
+    - name: "foresight.temporal-enrichment"
+      description: "Add temporal context and patterns"
+      input_schema:
+        type: object
+        properties:
+          documents:
+            type: array
+            items:
+              type: object
+          temporal_resolution:
+            type: string
+            enum: ["hour", "day", "week", "month"]
+            default: "day"
+          pattern_detection:
+            type: boolean
+            default: true
+  communication:
+    protocol: "json-rpc-2.0"
+    transport: "http"
+    endpoints:
+      - name: "primary"
+        url: "http://enrichment-agent.foresight-agents.svc.cluster.local:8090"
+  resources:
+    cpu: "400m"
+    memory: "768Mi"
+  scaling:
+    min_replicas: 2
+    max_replicas: 6
+    target_cpu_utilization: 75
+  health:
+    liveness_probe:
+      path: "/health"
+      port: 8080
+    readiness_probe:
+      path: "/ready"
+      port: 8080

@@ -1,0 +1,161 @@
+{
+  "dashboard": {
+    "id": null,
+    "title": "Foresight Health Signal Intelligence",
+    "tags": ["foresight", "health", "surveillance", "agents"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Health Signal Ingestion Rate",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "sum(rate(foresight_signals_ingested_total[5m])) by (agent_type)",
+            "legendFormat": "{{agent_type}}"
+          }
+        ],
+        "yAxes": [
+          {
+            "label": "Signals per second"
+          }
+        ],
+        "xAxis": {
+          "mode": "time"
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 0}
+      },
+      {
+        "id": 2,
+        "title": "Agent Health Status",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "foresight_agent_health_status",
+            "legendFormat": "{{agent_name}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": {
+              "steps": [
+                {"color": "red", "value": 0},
+                {"color": "green", "value": 1}
+              ]
+            },
+            "mappings": [
+              {"type": "value", "value": "0", "text": "Unhealthy"},
+              {"type": "value", "value": "1", "text": "Healthy"}
+            ]
+          }
+        },
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 0}
+      },
+      {
+        "id": 3,
+        "title": "Public Health Threat Levels",
+        "type": "gauge",
+        "targets": [
+          {
+            "expr": "foresight_threat_level",
+            "legendFormat": "{{jurisdiction}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 1,
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "yellow", "value": 0.4},
+                {"color": "orange", "value": 0.6},
+                {"color": "red", "value": 0.8}
+              ]
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8}
+      },
+      {
+        "id": 4,
+        "title": "Agent Communication Latency",
+        "type": "heatmap",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, sum(rate(foresight_agent_communication_duration_seconds_bucket[5m])) by (le, source_agent, target_agent))",
+            "legendFormat": "{{source_agent}} → {{target_agent}}"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16}
+      },
+      {
+        "id": 5,
+        "title": "Signal Fusion Confidence Scores",
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "foresight_signal_fusion_confidence",
+            "legendFormat": "{{signal_type}}"
+          }
+        ],
+        "yAxes": [
+          {
+            "min": 0,
+            "max": 1,
+            "label": "Confidence Score"
+          }
+        ],
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16}
+      },
+      {
+        "id": 6,
+        "title": "Geographic Health Clusters",
+        "type": "worldmap",
+        "targets": [
+          {
+            "expr": "foresight_geographic_clusters",
+            "legendFormat": "{{location}}"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "custom": {
+              "thresholds": {
+                "steps": [
+                  {"color": "green", "value": 0},
+                  {"color": "yellow", "value": 5},
+                  {"color": "red", "value": 15}
+                ]
+              }
+            }
+          }
+        },
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 24}
+      },
+      {
+        "id": 7,
+        "title": "Recent Health Alerts",
+        "type": "logs",
+        "targets": [
+          {
+            "expr": "{job=\"foresight-agents\", level=\"alert\"}"
+          }
+        ],
+        "options": {
+          "showTime": true,
+          "showLabels": true,
+          "sortOrder": "Descending"
+        },
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 32}
+      }
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "refresh": "5s",
+    "schemaVersion": 27,
+    "version": 1
+  }
+}

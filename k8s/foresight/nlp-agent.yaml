@@ -1,0 +1,267 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nlp-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: nlp-agent
+    app.kubernetes.io/component: analysis
+    app.kubernetes.io/part-of: foresight-platform
+    agent.foresight.ca/type: analysis
+    agent.foresight.ca/specialization: natural-language-processing
+spec:
+  replicas: 4
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nlp-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nlp-agent
+        app.kubernetes.io/component: analysis
+        agent.foresight.ca/type: analysis
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: nlp-processor
+        image: ghcr.io/simardeep1792/foresight-nlp-agent:latest
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 8090
+          name: a2a-protocol
+          protocol: TCP
+        env:
+        - name: AGENT_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: AGENT_TYPE
+          value: "nlp-agent"
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: REGISTRY_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: registry_endpoint
+        - name: NLP_SERVICE_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: foresight-secrets
+              key: nlp_service_token
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: log_level
+        - name: MODEL_CACHE_SIZE
+          value: "2048"
+        - name: BATCH_SIZE
+          value: "32"
+        - name: SUPPORTED_LANGUAGES
+          value: "en,fr,es"
+        resources:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: 2000m
+            memory: 4Gi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 60
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        volumeMounts:
+        - name: config
+          mountPath: /app/config
+          readOnly: true
+        - name: model-cache
+          mountPath: /app/models
+        - name: temp-processing
+          mountPath: /app/temp
+      initContainers:
+      - name: model-downloader
+        image: ghcr.io/simardeep1792/foresight-model-downloader:latest
+        env:
+        - name: MODELS_TO_DOWNLOAD
+          value: "health-ner,symptom-classifier,multilingual-health"
+        volumeMounts:
+        - name: model-cache
+          mountPath: /models
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+      volumes:
+      - name: config
+        configMap:
+          name: foresight-config
+      - name: model-cache
+        persistentVolumeClaim:
+          claimName: nlp-model-cache
+      - name: temp-processing
+        emptyDir:
+          sizeLimit: 5Gi
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nlp-model-cache
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: nlp-agent
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: standard
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nlp-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: nlp-agent
+    app.kubernetes.io/component: analysis
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+  - name: a2a-protocol
+    port: 8090
+    targetPort: 8090
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: nlp-agent
+---
+apiVersion: openagent.dev/v1
+kind: Agent
+metadata:
+  name: nlp-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: nlp-agent
+    app.kubernetes.io/component: analysis
+spec:
+  type: nlp-agent
+  version: "1.0.0"
+  capabilities:
+    - name: "nlp.extract-symptoms"
+      description: "Identify disease symptoms and health indicators"
+      input_schema:
+        type: object
+        properties:
+          text:
+            type: string
+          language:
+            type: string
+            enum: ["en", "fr", "es"]
+            default: "en"
+          confidence_threshold:
+            type: number
+            minimum: 0.0
+            maximum: 1.0
+            default: 0.7
+    - name: "nlp.classify-severity"
+      description: "Assess severity levels of health events"
+      input_schema:
+        type: object
+        properties:
+          content:
+            type: string
+          context:
+            type: object
+            properties:
+              location:
+                type: string
+              population:
+                type: integer
+              date:
+                type: string
+                format: date-time
+    - name: "nlp.link-entities"
+      description: "Connect related health entities across documents"
+      input_schema:
+        type: object
+        properties:
+          documents:
+            type: array
+            items:
+              type: object
+              properties:
+                id:
+                  type: string
+                content:
+                  type: string
+                metadata:
+                  type: object
+    - name: "nlp.detect-language"
+      description: "Handle multilingual content processing"
+      input_schema:
+        type: object
+        properties:
+          text:
+            type: string
+          auto_translate:
+            type: boolean
+            default: false
+    - name: "nlp.analyze-urgently"
+      description: "Emergency analysis for high-priority signals"
+      input_schema:
+        type: object
+        properties:
+          signal:
+            type: object
+          priority_level:
+            type: string
+            enum: ["critical", "high", "medium"]
+  communication:
+    protocol: "json-rpc-2.0"
+    transport: "http"
+    endpoints:
+      - name: "primary"
+        url: "http://nlp-agent.foresight-agents.svc.cluster.local:8090"
+  resources:
+    cpu: "500m"
+    memory: "1Gi"
+  scaling:
+    min_replicas: 2
+    max_replicas: 10
+    target_cpu_utilization: 75
+  health:
+    liveness_probe:
+      path: "/health"
+      port: 8080
+    readiness_probe:
+      path: "/ready"
+      port: 8080

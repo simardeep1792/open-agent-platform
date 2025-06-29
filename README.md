@@ -1,6 +1,6 @@
-# Open Agent Platform
+# Agent-to-Agent Interoperability Platform
 
-A cloud-native, CNCF-aligned platform for agent-to-agent (A2A) interoperability, enabling secure, scalable communication between AI agents across distributed systems.
+Modern agent-based architecture demonstrating real-world A2A communication through the **Signal Detection Platform** - a production-ready modernization of the Public Health Agency of Canada's Foresight signal detection system.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-1.25+-blue.svg)](https://kubernetes.io/)
@@ -8,7 +8,9 @@ A cloud-native, CNCF-aligned platform for agent-to-agent (A2A) interoperability,
 
 ## Overview
 
-The Open Agent Platform provides a standardized, production-ready foundation for building interoperable agent ecosystems. It implements Google's Agent2Agent (A2A) protocol with native Kubernetes integration, enabling agents to discover, communicate, and collaborate securely across clusters and cloud environments.
+This project demonstrates agent-to-agent interoperability through a concrete, meaningful implementation: modernizing public health signal detection. Instead of toy examples, we've built a production-ready system that replaces traditional pipeline processing with coordinated agents.
+
+**Signal Detection Platform** (`./signal-detection/`) transforms the Foresight platform's complex m1/m2/pht module architecture into 5 clean, coordinated agents that handle the complete signal detection workflow.
 
 ### Key Features
 
@@ -64,53 +66,57 @@ graph TB
 - **Observability Stack**: Metrics, logging, and distributed tracing
 - **Security Framework**: Authentication, authorization, and encryption
 
-## Quick Start
+## Signal Detection Platform
 
-### Prerequisites
+The primary implementation demonstrates agent coordination through public health signal detection:
 
-- Kubernetes 1.25+
-- Helm 3.8+
-- kubectl configured for your cluster
-
-### Installation
-
-1. **Add the Helm repository:**
-   ```bash
-   helm repo add open-agent-platform https://charts.open-agent-platform.io
-   helm repo update
-   ```
-
-2. **Install the platform:**
-   ```bash
-   helm install oapf open-agent-platform/open-agent-platform \
-     --create-namespace \
-     --namespace open-agent-platform
-   ```
-
-3. **Verify installation:**
-   ```bash
-   kubectl get agents -n open-agent-platform
-   kubectl get pods -n open-agent-platform
-   ```
-
-### Local Development
-
-For local development with kind or minikube:
+### Quick Start
 
 ```bash
 # Clone the repository
 git clone https://github.com/simardeep1792/open-agent-platform.git
 cd open-agent-platform
 
-# Start local development environment
-make dev-setup
+# Deploy the signal detection platform
+cd signal-detection
+./scripts/deploy-signal-detection.sh
 
-# Deploy platform locally
-make dev-deploy
-
-# Access the dashboard
-kubectl port-forward svc/oapf-dashboard 8080:80 -n open-agent-platform
+# Start monitoring and access
+./dev/start-monitoring.sh
 ```
+
+### Architecture Overview
+
+The Signal Detection Platform replaces Foresight's traditional processing modules with 5 coordinated agents:
+
+```mermaid
+graph LR
+    A[Content Sources] --> B[Content Ingestion Agent]
+    B --> C[Signal Processing Agent]
+    C --> D[Pattern Detection Agent]
+    D --> E[Signal Classification Agent]
+    E --> F[Alerts & Dashboards]
+    
+    subgraph "Replaces Foresight"
+        G[m1: extract/preprocess/cluster/enrich/similarize]
+        H[m2: RSS processing/language detection]
+        I[pht: classification/output/upload]
+    end
+```
+
+### Core Agents
+
+1. **Content Ingestion Agent** - Unified processing for JSON documents, RSS feeds, APIs (replaces m1 extraction + m2 RSS logic)
+2. **Signal Processing Agent** - Modern NLP and entity extraction (replaces m1 preprocessing + m2 language detection)
+3. **Pattern Detection Agent** - Clustering, similarity, and anomaly detection (replaces m1 clustering + m2 clustering)
+4. **Signal Classification Agent** - Multi-category classification and alerting (replaces pht multi-cat-classifier + output logic)
+
+### Simplified from Foresight
+
+- **No m1/m2/pht separation**: Logical agent flow instead of module boundaries
+- **Modern NLP**: Transformer models instead of legacy preprocessing
+- **Agent coordination**: Replaces manual GPU coordination scripts
+- **Unified data processing**: Source-agnostic content handling
 
 ## Agent Development
 

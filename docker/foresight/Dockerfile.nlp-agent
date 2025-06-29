@@ -1,0 +1,89 @@
+# NLP Analysis Agent - Foresight Health Platform
+# Specialized for multi-language health entity extraction and analysis
+
+FROM python:3.11-slim AS python-base
+
+# Install system dependencies for NLP processing
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python NLP dependencies
+COPY docker/foresight/requirements/nlp-agent.txt /tmp/
+RUN pip install --no-cache-dir -r /tmp/nlp-agent.txt
+
+# Download health-specific NLP models
+RUN python -c "import spacy; spacy.cli.download('en_core_web_sm')" && \
+    python -c "import spacy; spacy.cli.download('fr_core_news_sm')" && \
+    python -c "import nltk; nltk.download('punkt'); nltk.download('stopwords')"
+
+# Node.js stage for agent framework
+FROM node:18-slim AS node-base
+
+# Install Node.js dependencies
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+
+# Final stage combining Python and Node.js
+FROM node:18-slim AS production
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create application user
+RUN groupadd -g 1000 foresight && \
+    useradd -r -u 1000 -g foresight foresight
+
+# Set working directory
+WORKDIR /app
+
+# Copy Python environment from python-base
+COPY --from=python-base /usr/local/lib/python3.11/site-packages/ /usr/local/lib/python3.11/site-packages/
+COPY --from=python-base /usr/local/bin/ /usr/local/bin/
+
+# Copy Node.js dependencies
+COPY --from=node-base /app/node_modules/ ./node_modules/
+
+# Copy application code
+COPY --chown=foresight:foresight dist/ ./
+COPY --chown=foresight:foresight config/nlp/ ./config/nlp/
+
+# Create required directories
+RUN mkdir -p /app/models /app/data/nlp /app/logs /app/temp && \
+    chown -R foresight:foresight /app
+
+# NLP agent specific environment variables
+ENV AGENT_TYPE=nlp-agent
+ENV PYTHON_PATH=/usr/bin/python3
+ENV NLP_MODEL_CACHE_SIZE=2048
+ENV NLP_BATCH_SIZE=32
+ENV NLP_MAX_TEXT_LENGTH=10000
+ENV SUPPORTED_LANGUAGES=en,fr,es
+ENV HEALTH_NER_MODEL_PATH=/app/models/health-ner
+ENV SYMPTOM_CLASSIFIER_PATH=/app/models/symptom-classifier
+ENV MULTILINGUAL_MODEL_PATH=/app/models/multilingual-health
+ENV NLP_CONFIDENCE_THRESHOLD=0.7
+ENV MODEL_DOWNLOAD_TIMEOUT=300
+
+# Expose ports
+EXPOSE 8080 8090
+
+# Health check for NLP processing
+HEALTHCHECK --interval=45s --timeout=15s --start-period=120s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Switch to non-root user
+USER foresight
+
+# Initialize NLP models on startup
+COPY --chown=foresight:foresight docker/foresight/scripts/init-nlp-models.py ./init-models.py
+
+# Start NLP agent with model initialization
+CMD ["sh", "-c", "python3 init-models.py && node agents/nlp/index.js"]

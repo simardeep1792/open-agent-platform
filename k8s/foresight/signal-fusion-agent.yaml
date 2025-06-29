@@ -1,0 +1,330 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: signal-fusion-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: signal-fusion-agent
+    app.kubernetes.io/component: intelligence-fusion
+    app.kubernetes.io/part-of: foresight-platform
+    agent.foresight.ca/type: fusion
+    agent.foresight.ca/specialization: signal-correlation
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: signal-fusion-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: signal-fusion-agent
+        app.kubernetes.io/component: intelligence-fusion
+        agent.foresight.ca/type: fusion
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: fusion-processor
+        image: ghcr.io/simardeep1792/foresight-fusion-agent:latest
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 8090
+          name: a2a-protocol
+          protocol: TCP
+        - containerPort: 8091
+          name: coordination
+          protocol: TCP
+        env:
+        - name: AGENT_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: AGENT_TYPE
+          value: "fusion-agent"
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: REGISTRY_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: registry_endpoint
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: log_level
+        - name: ALERT_THRESHOLD_HIGH
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: alert_threshold_high
+        - name: ALERT_THRESHOLD_MEDIUM
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: alert_threshold_medium
+        - name: CORRELATION_WINDOW_MINUTES
+          value: "60"
+        - name: MAX_SIGNAL_AGE_HOURS
+          value: "24"
+        - name: CONFIDENCE_THRESHOLD
+          value: "0.7"
+        - name: KNOWLEDGE_GRAPH_SIZE
+          value: "10000"
+        resources:
+          requests:
+            cpu: 400m
+            memory: 1Gi
+          limits:
+            cpu: 2000m
+            memory: 4Gi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 45
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 20
+          periodSeconds: 10
+        volumeMounts:
+        - name: config
+          mountPath: /app/config
+          readOnly: true
+        - name: fusion-cache
+          mountPath: /app/cache
+        - name: knowledge-graph
+          mountPath: /app/knowledge
+        - name: correlation-workspace
+          mountPath: /app/workspace
+      volumes:
+      - name: config
+        configMap:
+          name: foresight-config
+      - name: fusion-cache
+        persistentVolumeClaim:
+          claimName: fusion-cache-store
+      - name: knowledge-graph
+        persistentVolumeClaim:
+          claimName: knowledge-graph-store
+      - name: correlation-workspace
+        emptyDir:
+          sizeLimit: 5Gi
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: fusion-cache-store
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: signal-fusion-agent
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 25Gi
+  storageClassName: standard
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: knowledge-graph-store
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: signal-fusion-agent
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 30Gi
+  storageClassName: standard
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: signal-fusion-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: signal-fusion-agent
+    app.kubernetes.io/component: intelligence-fusion
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+  - name: a2a-protocol
+    port: 8090
+    targetPort: 8090
+    protocol: TCP
+  - name: coordination
+    port: 8091
+    targetPort: 8091
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: signal-fusion-agent
+---
+apiVersion: openagent.dev/v1
+kind: Agent
+metadata:
+  name: signal-fusion-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: signal-fusion-agent
+    app.kubernetes.io/component: intelligence-fusion
+spec:
+  type: fusion-agent
+  version: "1.0.0"
+  capabilities:
+    - name: "fusion.correlate-signals"
+      description: "Connect related signals from different sources"
+      input_schema:
+        type: object
+        properties:
+          signals:
+            type: array
+            items:
+              type: object
+              properties:
+                source_agent:
+                  type: string
+                signal_type:
+                  type: string
+                data:
+                  type: object
+                timestamp:
+                  type: string
+                  format: date-time
+                confidence:
+                  type: number
+                  minimum: 0.0
+                  maximum: 1.0
+          correlation_window:
+            type: string
+            pattern: "^[0-9]+[smh]$"
+            default: "1h"
+    - name: "fusion.confidence-scoring"
+      description: "Assign confidence levels to fused intelligence"
+      input_schema:
+        type: object
+        properties:
+          correlated_signals:
+            type: array
+            items:
+              type: object
+          weighting_factors:
+            type: object
+            properties:
+              source_reliability:
+                type: number
+              temporal_consistency:
+                type: number
+              spatial_coherence:
+                type: number
+              cross_validation:
+                type: number
+    - name: "fusion.priority-ranking"
+      description: "Rank signals by urgency and importance"
+      input_schema:
+        type: object
+        properties:
+          fused_signals:
+            type: array
+            items:
+              type: object
+          ranking_criteria:
+            type: object
+            properties:
+              public_health_impact:
+                type: number
+              urgency_level:
+                type: number
+              resource_requirements:
+                type: number
+              jurisdictional_scope:
+                type: number
+    - name: "fusion.knowledge-graph"
+      description: "Build and maintain health knowledge graphs"
+      input_schema:
+        type: object
+        properties:
+          entities:
+            type: array
+            items:
+              type: object
+              properties:
+                entity_type:
+                  type: string
+                  enum: ["disease", "symptom", "location", "person", "event"]
+                entity_id:
+                  type: string
+                properties:
+                  type: object
+          relationships:
+            type: array
+            items:
+              type: object
+              properties:
+                from_entity:
+                  type: string
+                to_entity:
+                  type: string
+                relationship_type:
+                  type: string
+                confidence:
+                  type: number
+    - name: "fusion.emergency-correlation"
+      description: "Emergency signal correlation for critical events"
+      input_schema:
+        type: object
+        properties:
+          signal:
+            type: object
+          analyses:
+            type: array
+            items:
+              type: object
+          priority:
+            type: string
+            enum: ["critical", "high"]
+  communication:
+    protocol: "json-rpc-2.0"
+    transport: "http"
+    endpoints:
+      - name: "primary"
+        url: "http://signal-fusion-agent.foresight-agents.svc.cluster.local:8090"
+      - name: "coordination"
+        url: "http://signal-fusion-agent.foresight-agents.svc.cluster.local:8091"
+  resources:
+    cpu: "400m"
+    memory: "1Gi"
+  scaling:
+    min_replicas: 2
+    max_replicas: 5
+    target_cpu_utilization: 75
+  health:
+    liveness_probe:
+      path: "/health"
+      port: 8080
+    readiness_probe:
+      path: "/ready"
+      port: 8080

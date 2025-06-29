@@ -1,0 +1,59 @@
+# Base Dockerfile for Foresight Health Agents
+# Provides common dependencies for all health surveillance agents
+
+FROM node:18-alpine AS base
+
+# Security: Create non-root user for health data processing
+RUN addgroup -g 1000 foresight && \
+    adduser -D -s /bin/sh -u 1000 -G foresight foresight
+
+# Install system dependencies for health data processing
+RUN apk add --no-cache \
+    python3 \
+    py3-pip \
+    py3-numpy \
+    py3-pandas \
+    curl \
+    jq \
+    ca-certificates \
+    tzdata
+
+# Set timezone for accurate health event timestamps
+ENV TZ=America/Toronto
+
+# Create application directory
+WORKDIR /app
+
+# Install health-specific Python dependencies
+COPY requirements/health-base.txt /tmp/
+RUN pip3 install --no-cache-dir -r /tmp/health-base.txt
+
+# Copy base agent framework
+COPY src/agents/base/ ./base/
+COPY src/communication/ ./communication/
+COPY src/types/ ./types/
+
+# Install Node.js dependencies for agent framework
+COPY package*.json ./
+RUN npm ci --only=production && npm cache clean --force
+
+# Set up health data directories
+RUN mkdir -p /app/data /app/logs /app/config /app/models && \
+    chown -R foresight:foresight /app
+
+# Health data processing environment variables
+ENV NODE_ENV=production
+ENV LOG_LEVEL=info
+ENV HEALTH_DATA_RETENTION_DAYS=365
+ENV AGENT_HEARTBEAT_INTERVAL=10000
+ENV SURVEILLANCE_MODE=active
+
+# Switch to non-root user for security
+USER foresight
+
+# Default health check for all agents
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Default command (to be overridden by specific agents)
+CMD ["node", "index.js"]

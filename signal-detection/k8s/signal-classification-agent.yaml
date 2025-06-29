@@ -1,0 +1,186 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: signal-classification-agent
+  namespace: signal-detection
+  labels:
+    app.kubernetes.io/name: signal-classification-agent
+    app.kubernetes.io/component: classification
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: signal-classification-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: signal-classification-agent
+        app.kubernetes.io/component: classification
+    spec:
+      containers:
+      - name: signal-classification
+        image: ghcr.io/simardeep1792/signal-detection-classification:latest
+        ports:
+        - containerPort: 8080
+          name: http
+        - containerPort: 8090
+          name: agent-api
+        env:
+        - name: AGENT_TYPE
+          value: "signal-classification"
+        - name: CLASSIFICATION_THRESHOLD
+          valueFrom:
+            configMapKeyRef:
+              name: signal-detection-config
+              key: classification_threshold
+        - name: DATABASE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: signal-detection-config
+              key: database_url
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: signal-detection-config
+              key: log_level
+        resources:
+          requests:
+            cpu: 300m
+            memory: 512Mi
+          limits:
+            cpu: 1500m
+            memory: 2Gi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 15
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 15
+          periodSeconds: 10
+        volumeMounts:
+        - name: classification-models
+          mountPath: /models
+        - name: output-cache
+          mountPath: /output
+      volumes:
+      - name: classification-models
+        persistentVolumeClaim:
+          claimName: signal-detection-models
+      - name: output-cache
+        emptyDir:
+          sizeLimit: 1Gi
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: signal-classification-agent
+  namespace: signal-detection
+spec:
+  selector:
+    app.kubernetes.io/name: signal-classification-agent
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+  - name: agent-api
+    port: 8090
+    targetPort: 8090
+---
+apiVersion: openagent.dev/v1
+kind: Agent
+metadata:
+  name: signal-classification-agent
+  namespace: signal-detection
+spec:
+  type: signal-classification
+  version: "1.0.0"
+  capabilities:
+    - name: "classify.multi-category"
+      description: "Multi-category signal classification (replaces Foresight pht multi-cat-classifier)"
+      input_schema:
+        type: object
+        properties:
+          signals:
+            type: array
+            items:
+              type: object
+          categories:
+            type: array
+            items:
+              type: string
+              enum: ["outbreak", "trend", "anomaly", "normal", "alert"]
+          confidence_threshold:
+            type: number
+            default: 0.8
+    - name: "classify.priority-scoring"
+      description: "Signal priority and urgency scoring"
+      input_schema:
+        type: object
+        properties:
+          classified_signals:
+            type: array
+            items:
+              type: object
+          scoring_criteria:
+            type: object
+            properties:
+              urgency_weight:
+                type: number
+                default: 0.4
+              impact_weight:
+                type: number
+                default: 0.3
+              confidence_weight:
+                type: number
+                default: 0.3
+    - name: "classify.generate-alerts"
+      description: "Generate actionable alerts from classified signals"
+      input_schema:
+        type: object
+        properties:
+          high_priority_signals:
+            type: array
+            items:
+              type: object
+          alert_channels:
+            type: array
+            items:
+              type: string
+              enum: ["dashboard", "email", "webhook", "api"]
+    - name: "classify.export-results"
+      description: "Export classification results (replaces Foresight pht output_graph/upload_file)"
+      input_schema:
+        type: object
+        properties:
+          results:
+            type: object
+          export_format:
+            type: string
+            enum: ["json", "csv", "graph", "dashboard"]
+            default: "json"
+          destination:
+            type: object
+            properties:
+              type:
+                type: string
+                enum: ["file", "database", "api", "visualization"]
+              target:
+                type: string
+  communication:
+    protocol: "json-rpc-2.0"
+    transport: "http"
+    endpoints:
+      - name: "primary"
+        url: "http://signal-classification-agent.signal-detection.svc.cluster.local:8090"
+  scaling:
+    min_replicas: 1
+    max_replicas: 3
+    target_cpu_utilization: 75

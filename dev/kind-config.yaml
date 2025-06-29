@@ -1,0 +1,75 @@
+# Kind cluster configuration for Open Agent Platform local development
+# Optimized for agent-to-agent communication testing and development
+
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: open-agent-platform
+
+# Networking configuration for agent communication
+networking:
+  # Use a specific subnet to avoid conflicts
+  podSubnet: "10.244.0.0/16"
+  serviceSubnet: "10.96.0.0/16"
+  # Disable default CNI to use our own
+  disableDefaultCNI: false
+  # Enable IPv6 for future multi-protocol agent communication
+  ipFamily: dual
+
+# Multi-node setup to test cross-node agent communication
+nodes:
+- role: control-plane
+  # Control plane with adequate resources for registry and controllers
+  kubeadmConfigPatches:
+  - |
+    kind: InitConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        node-labels: "node-type=control-plane"
+  # Port mappings for local access
+  extraPortMappings:
+  # Agent Registry API
+  - containerPort: 30080
+    hostPort: 8080
+    protocol: TCP
+  # Agent Dashboard UI  
+  - containerPort: 30081
+    hostPort: 8081
+    protocol: TCP
+  # Grafana (observability)
+  - containerPort: 30082
+    hostPort: 3000
+    protocol: TCP
+  # Prometheus (metrics)
+  - containerPort: 30083
+    hostPort: 9090
+    protocol: TCP
+  # Agent WebSocket connections
+  - containerPort: 30084
+    hostPort: 8084
+    protocol: TCP
+
+# Worker nodes for distributed agent deployment
+- role: worker
+  kubeadmConfigPatches:
+  - |
+    kind: JoinConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        node-labels: "node-type=worker,agent-zone=primary"
+
+- role: worker
+  kubeadmConfigPatches:
+  - |
+    kind: JoinConfiguration
+    nodeRegistration:
+      kubeletExtraArgs:
+        node-labels: "node-type=worker,agent-zone=secondary"
+
+# Feature gates for advanced Kubernetes features
+featureGates:
+  # Enable API priority and fairness for better resource management
+  APIPriorityAndFairness: true
+  # Enable topology aware hints for service routing
+  TopologyAwareHints: true
+  # Enable graceful node shutdown
+  GracefulNodeShutdown: true

@@ -1,0 +1,235 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: preprocessing-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: preprocessing-agent
+    app.kubernetes.io/component: preprocessing
+    app.kubernetes.io/part-of: foresight-platform
+    foresight.ca/agent-type: preprocessing
+    foresight.ca/pipeline-stage: m1-preprocess
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: preprocessing-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: preprocessing-agent
+        app.kubernetes.io/component: preprocessing
+        foresight.ca/agent-type: preprocessing
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: preprocessor
+        image: ghcr.io/simardeep1792/foresight-preprocessing-agent:latest
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        - containerPort: 8090
+          name: a2a-protocol
+          protocol: TCP
+        env:
+        - name: AGENT_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: AGENT_TYPE
+          value: "foresight-preprocessing-agent"
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: REGISTRY_ENDPOINT
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: registry_endpoint
+        - name: BATCH_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: batch_size
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              name: foresight-config
+              key: log_level
+        - name: SUPPORTED_LANGUAGES
+          value: "en,fr,es"
+        - name: TEXT_CLEANING_MODE
+          value: "aggressive"
+        - name: VALIDATION_THRESHOLD
+          value: "0.8"
+        resources:
+          requests:
+            cpu: 300m
+            memory: 512Mi
+          limits:
+            cpu: 1500m
+            memory: 2Gi
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 30
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 5
+        volumeMounts:
+        - name: config
+          mountPath: /app/config
+          readOnly: true
+        - name: processed-data
+          mountPath: /data/processed
+        - name: temp-workspace
+          mountPath: /tmp/preprocessing
+      volumes:
+      - name: config
+        configMap:
+          name: foresight-config
+      - name: processed-data
+        persistentVolumeClaim:
+          claimName: foresight-processed-data
+      - name: temp-workspace
+        emptyDir:
+          sizeLimit: 2Gi
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: preprocessing-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: preprocessing-agent
+    app.kubernetes.io/component: preprocessing
+spec:
+  type: ClusterIP
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+  - name: a2a-protocol
+    port: 8090
+    targetPort: 8090
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: preprocessing-agent
+---
+apiVersion: openagent.dev/v1
+kind: Agent
+metadata:
+  name: preprocessing-agent
+  namespace: foresight-agents
+  labels:
+    app.kubernetes.io/name: preprocessing-agent
+    app.kubernetes.io/component: preprocessing
+spec:
+  type: foresight-preprocessing-agent
+  version: "1.0.0"
+  capabilities:
+    - name: "foresight.clean-text"
+      description: "Text normalization and cleaning (replaces 01_preprocess.py)"
+      input_schema:
+        type: object
+        properties:
+          documents:
+            type: array
+            items:
+              type: object
+              properties:
+                id:
+                  type: string
+                content:
+                  type: string
+                language:
+                  type: string
+          cleaning_mode:
+            type: string
+            enum: ["basic", "standard", "aggressive"]
+            default: "standard"
+    - name: "foresight.language-detection"
+      description: "Identify document languages"
+      input_schema:
+        type: object
+        properties:
+          texts:
+            type: array
+            items:
+              type: string
+          confidence_threshold:
+            type: number
+            minimum: 0.0
+            maximum: 1.0
+            default: 0.8
+    - name: "foresight.extract-metadata"
+      description: "Parse and structure document metadata"
+      input_schema:
+        type: object
+        properties:
+          raw_documents:
+            type: array
+            items:
+              type: object
+          metadata_fields:
+            type: array
+            items:
+              type: string
+    - name: "foresight.validate-data"
+      description: "Ensure data quality and completeness"
+      input_schema:
+        type: object
+        properties:
+          documents:
+            type: array
+            items:
+              type: object
+          validation_rules:
+            type: object
+            properties:
+              min_content_length:
+                type: integer
+                default: 50
+              required_fields:
+                type: array
+                items:
+                  type: string
+              quality_threshold:
+                type: number
+                default: 0.7
+  communication:
+    protocol: "json-rpc-2.0"
+    transport: "http"
+    endpoints:
+      - name: "primary"
+        url: "http://preprocessing-agent.foresight-agents.svc.cluster.local:8090"
+  resources:
+    cpu: "300m"
+    memory: "512Mi"
+  scaling:
+    min_replicas: 2
+    max_replicas: 8
+    target_cpu_utilization: 75
+  health:
+    liveness_probe:
+      path: "/health"
+      port: 8080
+    readiness_probe:
+      path: "/ready"
+      port: 8080

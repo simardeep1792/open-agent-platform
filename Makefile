@@ -28,12 +28,9 @@ dev-setup: ## Setup local development environment
 	cd ui && npm install
 	@echo "Development environment ready"
 
-dev-cluster: ## Create local development cluster (kind)
-	@echo "Creating local Kubernetes cluster..."
-	@command -v kind >/dev/null 2>&1 || { echo "kind is required for local cluster"; exit 1; }
-	kind create cluster --name $(PROJECT_NAME) --config ./dev/kind-config.yaml
-	kubectl cluster-info --context kind-$(PROJECT_NAME)
-	@echo "Local cluster created"
+dev-cluster: ## Create and setup complete Kind cluster with platform
+	@echo "Setting up complete development environment..."
+	./scripts/setup-kind-cluster.sh
 
 dev-deploy: ## Deploy platform to local development environment
 	@echo "Deploying to development environment..."
