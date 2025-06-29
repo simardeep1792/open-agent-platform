@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  # Redis for message queuing and caching
+  redis:
+    image: redis:7-alpine
+    container_name: a2a-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    volumes:
+      - redis-data:/data
+    networks:
+      - a2a-network
+
+  # MongoDB for agent state storage
+  mongodb:
+    image: mongo:7
+    container_name: a2a-mongodb
+    ports:
+      - "27017:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: admin
+      MONGO_INITDB_ROOT_PASSWORD: password123
+      MONGO_INITDB_DATABASE: a2a
+    volumes:
+      - mongodb-data:/data/db
+    networks:
+      - a2a-network
+
+  # A2A Registry Server
+  registry:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: a2a-registry
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      REDIS_URL: redis://redis:6379
+      MONGODB_URL: mongodb://admin:password123@mongodb:27017/a2a?authSource=admin
+    depends_on:
+      - redis
+      - mongodb
+    volumes:
+      - ./logs:/app/logs
+    networks:
+      - a2a-network
+    restart: unless-stopped
+
+  # Agent Board UI (served by registry in production)
+  # In development, this runs separately on port 3001
+
+volumes:
+  redis-data:
+  mongodb-data:
+
+networks:
+  a2a-network:
+    driver: bridge

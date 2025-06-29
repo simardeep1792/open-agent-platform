@@ -1,0 +1,143 @@
+# Default values for a2a-agents
+# This is a YAML-formatted file.
+
+global:
+  imageRegistry: ""
+  imagePullSecrets: []
+  storageClass: ""
+
+# Registry service configuration
+registry:
+  enabled: true
+  replicaCount: 1
+  
+  image:
+    repository: a2a/registry
+    tag: "latest"
+    pullPolicy: IfNotPresent
+  
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 3000
+    annotations: {}
+  
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts:
+      - host: a2a-registry.local
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+  
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  
+  podAnnotations: {}
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1001
+    fsGroup: 1001
+  
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+      - ALL
+  
+  config:
+    logLevel: info
+    metricsEnabled: true
+    authentication:
+      type: mtls
+    
+  # Health check configuration
+  healthCheck:
+    enabled: true
+    livenessProbe:
+      initialDelaySeconds: 30
+      periodSeconds: 10
+      timeoutSeconds: 5
+      failureThreshold: 3
+    readinessProbe:
+      initialDelaySeconds: 5
+      periodSeconds: 5
+      timeoutSeconds: 3
+      failureThreshold: 2
+
+# Redis configuration (for message passing)
+redis:
+  enabled: true
+  auth:
+    enabled: true
+    password: ""
+  architecture: standalone
+  master:
+    persistence:
+      enabled: true
+      size: 8Gi
+  metrics:
+    enabled: true
+
+# Sample agents configuration
+agents:
+  cloudy:
+    enabled: true
+    image:
+      repository: a2a/cloudy-agent
+      tag: "latest"
+    resources:
+      limits:
+        cpu: 200m
+        memory: 256Mi
+      requests:
+        cpu: 50m
+        memory: 128Mi
+
+# Observability
+monitoring:
+  enabled: true
+  serviceMonitor:
+    enabled: true
+    interval: 30s
+  
+  prometheus:
+    enabled: true
+  
+  grafana:
+    enabled: true
+    dashboards:
+      enabled: true
+
+# Security
+security:
+  podSecurityPolicy:
+    enabled: false
+  networkPolicy:
+    enabled: false
+  
+  rbac:
+    create: true
+  
+  serviceAccount:
+    create: true
+    annotations: {}
+    name: ""
+
+# Custom Resource Definitions
+crds:
+  install: true
+  keep: true

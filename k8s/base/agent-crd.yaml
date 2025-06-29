@@ -1,0 +1,185 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: agents.a2a.io
+  labels:
+    app.kubernetes.io/name: a2a-agents
+    app.kubernetes.io/component: crd
+spec:
+  group: a2a.io
+  versions:
+  - name: v1
+    served: true
+    storage: true
+    schema:
+      openAPIV3Schema:
+        type: object
+        properties:
+          spec:
+            type: object
+            required:
+            - name
+            - version
+            - capabilities
+            properties:
+              name:
+                type: string
+                description: "Human-readable agent name"
+              version:
+                type: string
+                pattern: '^v?[0-9]+\.[0-9]+\.[0-9]+$'
+                description: "Semantic version of the agent"
+              description:
+                type: string
+                description: "Agent description and purpose"
+              capabilities:
+                type: array
+                description: "List of agent capabilities"
+                items:
+                  type: object
+                  required:
+                  - id
+                  - name
+                  properties:
+                    id:
+                      type: string
+                      description: "Unique capability identifier"
+                    name:
+                      type: string
+                      description: "Human-readable capability name"
+                    description:
+                      type: string
+                    inputSchema:
+                      type: object
+                      description: "JSON schema for input validation"
+                    outputSchema:
+                      type: object
+                      description: "JSON schema for output validation"
+                    modalities:
+                      type: array
+                      items:
+                        type: string
+                        enum: ["text", "audio", "video", "image", "file", "form"]
+                    async:
+                      type: boolean
+                      default: false
+                    streaming:
+                      type: boolean
+                      default: false
+              endpoints:
+                type: array
+                description: "Agent communication endpoints"
+                items:
+                  type: object
+                  required:
+                  - type
+                  - port
+                  properties:
+                    type:
+                      type: string
+                      enum: ["http", "grpc", "websocket"]
+                    port:
+                      type: integer
+                      minimum: 1
+                      maximum: 65535
+                    path:
+                      type: string
+                      default: "/"
+                    tls:
+                      type: boolean
+                      default: true
+              authentication:
+                type: object
+                properties:
+                  type:
+                    type: string
+                    enum: ["none", "bearer", "mtls", "spiffe"]
+                    default: "mtls"
+                  scopes:
+                    type: array
+                    items:
+                      type: string
+              resources:
+                type: object
+                description: "Resource requirements"
+                properties:
+                  requests:
+                    type: object
+                    properties:
+                      cpu:
+                        type: string
+                      memory:
+                        type: string
+                  limits:
+                    type: object
+                    properties:
+                      cpu:
+                        type: string
+                      memory:
+                        type: string
+              healthCheck:
+                type: object
+                properties:
+                  path:
+                    type: string
+                    default: "/health"
+                  intervalSeconds:
+                    type: integer
+                    default: 30
+                  timeoutSeconds:
+                    type: integer
+                    default: 5
+          status:
+            type: object
+            properties:
+              phase:
+                type: string
+                enum: ["Pending", "Running", "Failed", "Succeeded"]
+              health:
+                type: string
+                enum: ["healthy", "degraded", "unhealthy", "unknown"]
+              lastSeen:
+                type: string
+                format: date-time
+              conditions:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    type:
+                      type: string
+                    status:
+                      type: string
+                      enum: ["True", "False", "Unknown"]
+                    lastTransitionTime:
+                      type: string
+                      format: date-time
+                    reason:
+                      type: string
+                    message:
+                      type: string
+              observedGeneration:
+                type: integer
+              registeredCapabilities:
+                type: array
+                items:
+                  type: string
+    subresources:
+      status: {}
+    additionalPrinterColumns:
+    - name: Phase
+      type: string
+      jsonPath: .status.phase
+    - name: Health
+      type: string
+      jsonPath: .status.health
+    - name: Age
+      type: date
+      jsonPath: .metadata.creationTimestamp
+  scope: Namespaced
+  names:
+    plural: agents
+    singular: agent
+    kind: Agent
+    shortNames:
+    - ag
